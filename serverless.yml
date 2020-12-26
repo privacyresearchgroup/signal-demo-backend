@@ -1,0 +1,241 @@
+service:
+  name: signal-service
+# app and org for use with dashboard.serverless.com
+#app: your-app-name
+#org: your-org-name
+
+custom:
+  webpack:
+    webpackConfig: ./webpack.config.js
+    includeModules: true
+
+# Add the serverless-webpack plugin
+plugins:
+  - serverless-webpack
+
+provider:
+  name: aws
+  runtime: nodejs12.x
+  region: us-west-2
+  stage: dev
+  websocketsApiName: ${self:service}-${opt:stage, self:provider.stage}-ws
+  websocketsApiRouteSelectionExpression: $request.body.action
+  apiGateway:
+    minimumCompressionSize: 1024 # Enable gzip compression for responses > 1 KB
+  apiKeys:
+      - apikey-${self:service}-${opt:stage, self:provider.stage}
+  iamRoleStatements:
+      - Effect: Allow
+        Action:
+            - dynamodb:Query
+            - dynamodb:Scan
+            - dynamodb:GetItem
+            - dynamodb:PutItem
+            - dynamodb:UpdateItem
+            - dynamodb:DeleteItem
+            - dynamodb:BatchWriteItem
+        Resource: 'arn:aws:dynamodb:${opt:region, self:provider.region}:*:table/${self:provider.environment.KEY_BUNDLE_TABLE_NAME}'
+      - Effect: Allow
+        Action:
+            - dynamodb:Query
+            - dynamodb:Scan
+            - dynamodb:GetItem
+            - dynamodb:PutItem
+            - dynamodb:UpdateItem
+            - dynamodb:DeleteItem
+            - dynamodb:BatchWriteItem
+            - dynamodb:DescribeStream
+            - dynamodb:GetRecords
+            - dynamodb:GetShardIterator
+            - dynamodb:ListStreams
+        Resource: 'arn:aws:dynamodb:${opt:region, self:provider.region}:*:table/${self:provider.environment.MESSAGE_TABLE_NAME}'
+      - Effect: Allow
+        Action:
+            - dynamodb:Query
+            - dynamodb:Scan
+            - dynamodb:GetItem
+            - dynamodb:PutItem
+            - dynamodb:UpdateItem
+            - dynamodb:DeleteItem
+            - dynamodb:BatchWriteItem
+        Resource: 'arn:aws:dynamodb:${opt:region, self:provider.region}:*:table/${self:provider.environment.SUBS_TABLE_NAME}'
+      - Effect: Allow
+        Action:
+            - dynamodb:Query
+            - dynamodb:Scan
+            - dynamodb:GetItem
+            - dynamodb:PutItem
+            - dynamodb:UpdateItem
+            - dynamodb:DeleteItem
+            - dynamodb:BatchWriteItem
+        Resource: 'arn:aws:dynamodb:${opt:region, self:provider.region}:*:table/${self:provider.environment.SUBS_TABLE_NAME}/index/${self:provider.environment.SUBS_TABLE_NAME}-cxn-index'
+      
+  environment:
+    AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
+    KEY_BUNDLE_TABLE_NAME: ${self:service}-keys-${opt:stage, self:provider.stage}
+    MESSAGE_TABLE_NAME: ${self:service}-messages-${opt:stage, self:provider.stage}
+    SUBS_TABLE_NAME: ${self:service}-subs-${opt:stage, self:provider.stage}
+    STAGE: ${opt:stage, self:provider.stage}
+    REGION: ${opt:region, self:provider.region}
+    WEBSOCKETS_API: !Ref WebsocketsApi
+
+functions:
+  register:
+    handler: handler.register
+    events:
+      - http:
+          method: put
+          path: keys/{address}
+          private: true
+          cors: true
+          request:
+              parameters:
+                  paths:
+                      address: true
+  getBundle:
+    handler: handler.prekeyBundle
+    events:
+      - http:
+          method: get
+          path: keys/{address}
+          private: true
+          cors: true
+          request:
+              parameters:
+                  paths:
+                      address: true
+  getMessages:
+    handler: handler.messages
+    events:
+      - http:
+          method: get
+          path: messages/{address}
+          private: true
+          cors: true
+          request:
+              parameters:
+                  paths:
+                      address: true
+                  querystrings:
+                      after: true
+  sendMessage:
+    handler: handler.send
+    events:
+      - http:
+          method: post
+          path: messages/{address}
+          private: true
+          cors: true
+          request:
+              parameters:
+                  paths:
+                      address: true
+  ws_connect:
+      handler: websocket.connect
+      timeout: 10
+      events:
+          - websocket:
+                route: $connect
+  ws_default:
+      handler: websocket.handleDefault
+      timeout: 10
+      events:
+          - websocket:
+                route: $default
+  acceptMessage:
+      handler: websocket.acceptMessage
+      events:
+          - websocket:
+                route: sendMessage
+  subscribe:
+      handler: websocket.subscribe
+      events:
+          - websocket:
+                route: subscribe
+  getRecent:
+      handler: websocket.getRecentMessages
+      events:
+          - websocket:
+                route: recent
+  ws_disconnect:
+      handler: websocket.disconnect
+      timeout: 6
+      events:
+          - websocket:
+                route: $disconnect 
+  broadcast-message:
+    handler: websocket.onMessageInsert
+    events:
+      - stream:
+          type: dynamodb
+          batchSize: 1
+          startingPosition: LATEST
+          arn:
+            Fn::GetAtt:
+              - messageTable
+              - StreamArn
+
+resources: # CloudFormation template syntax from here on.
+    Resources:
+        keyBundleTable:
+            Type: AWS::DynamoDB::Table
+            Properties:
+                TableName: ${self:provider.environment.KEY_BUNDLE_TABLE_NAME}
+                AttributeDefinitions:
+                    - AttributeName: address
+                      AttributeType: S
+                KeySchema:
+                    - AttributeName: address
+                      KeyType: HASH
+                ProvisionedThroughput:
+                    ReadCapacityUnits: 1
+                    WriteCapacityUnits: 1
+
+        messageTable:
+            Type: AWS::DynamoDB::Table
+            Properties:
+                TableName: ${self:provider.environment.MESSAGE_TABLE_NAME}
+                AttributeDefinitions:
+                    - AttributeName: address
+                      AttributeType: S
+                    - AttributeName: sortID
+                      AttributeType: S
+                KeySchema:
+                    - AttributeName: address
+                      KeyType: HASH
+                    - AttributeName: sortID
+                      KeyType: RANGE
+                ProvisionedThroughput:
+                    ReadCapacityUnits: 1
+                    WriteCapacityUnits: 1
+                StreamSpecification:
+                  StreamViewType: NEW_IMAGE
+        subsTable:
+            Type: AWS::DynamoDB::Table
+            Properties:
+                TableName: ${self:provider.environment.SUBS_TABLE_NAME}
+                AttributeDefinitions:
+                    - AttributeName: sub
+                      AttributeType: S
+                    - AttributeName: connectionID
+                      AttributeType: S
+                KeySchema:
+                    - AttributeName: sub
+                      KeyType: HASH
+                    - AttributeName: connectionID
+                      KeyType: RANGE
+                ProvisionedThroughput:
+                    ReadCapacityUnits: 1
+                    WriteCapacityUnits: 1
+                GlobalSecondaryIndexes:
+                    - IndexName: ${self:provider.environment.SUBS_TABLE_NAME}-cxn-index
+                      KeySchema:
+                          - AttributeName: connectionID
+                            KeyType: HASH
+                          - AttributeName: sub
+                            KeyType: RANGE
+                      Projection:
+                          ProjectionType: KEYS_ONLY
+                      ProvisionedThroughput:
+                          ReadCapacityUnits: 1
+                          WriteCapacityUnits: 1
