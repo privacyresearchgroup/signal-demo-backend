@@ -1,7 +1,8 @@
 # Simple Signal Server
 
 This repository implements the server components needed to run a simple signal service: a directory/key service
-and a message service.
+and a message service. _It is built only to support demonstrations of Signal Protocol SDKs and is not a recommended 
+production system._
 
 ## Getting Started
 
