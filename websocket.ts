@@ -75,25 +75,26 @@ export const acceptMessage: Handler = async (event: WebsocketAPIGatewayEvent) =>
 }
 
 export const onMessageInsert: Handler = async (event: DynamoDBStreamEvent) => {
-    console.log(`dynamodb stream event triggered`, {
-        event: event.Records[0],
-        newImage: event.Records[0].dynamodb.NewImage,
-    })
-    // POST to all address connectionIDs
-    let message: { [x: string]: AttributeValue }
-    try {
-        message = event.Records[0].dynamodb.NewImage
-    } catch (err) {
-        console.log('Invalid message format', event.Records[0])
-        return {
-            statusCode: 200,
-            body: '',
+    for (const record of event.Records) {
+        // POST to all address connectionIDs
+        if (record.eventName === 'REMOVE') {
+            continue
         }
-    }
+        let message: { [x: string]: AttributeValue }
+        try {
+            message = record.dynamodb.NewImage
+        } catch (err) {
+            console.log('Invalid message format', record)
+            return {
+                statusCode: 200,
+                body: '',
+            }
+        }
 
-    const address = message.address.S
-    const msg = message.message.S
-    await sendMessage(address, msg)
+        const address = message.address.S
+        const msg = message.message.S
+        await sendMessage(address, msg)
+    }
     return {
         statusCode: 200,
         body: '',
